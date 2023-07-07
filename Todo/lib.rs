@@ -1,91 +1,153 @@
 use anchor_lang::prelude::*;
-pub mod constant;
-use crate::constant::*;
-declare_id!("nE6yX2gtU6CxVm1zPxptxiJnrsUFNZvdAGckzHsDN9v");
+
+mod constants;
+mod errors;
+mod states;
+
+use crate::{constants::*, errors::*, states::*};
+
+declare_id!("");
 
 #[program]
-pub mod noter {
+pub mod satyam_todo {
     use super::*;
 
-    pub fn create_user(ctx: Context<CreateUser>, name: String, avatar: String) -> Result<()> {
-        let user = &mut ctx.accounts.user_account;
-        let authority = &mut ctx.accounts.authority;
-        user.name = name;
-        user.avatar = avatar;
-        user.last_post_id=0;
-        user.authority = authority.key();
+    pub fn initialize_user(ctx: Context<InitializeUser>) -> Result<()> {
+        // initialize user
+        let user_profile = &mut ctx.accounts.user_profile;
+
+        user_profile.authority = ctx.accounts.authority.key();
+        user_profile.last_todo = 0;
+        user_profile.todo_count = 0;
 
         Ok(())
     }
 
-    pub fn create_post(ctx: Context<CreatePost>, content: String) -> Result<()> {
-        
-        let user_account = &mut ctx.accounts.user_account;
-        let post = &mut ctx.accounts.post;
-        let authority = &mut ctx.accounts.authority;
-        post.authority = authority.key();
-        post.user=user_account.key();
-        post.id=user_account.last_post_id;
-        post.content=content;
-        user_account.last_post_id=user_account.last_post_id
-            .checked_add(1)
-            .unwrap();
+    pub fn add_todo(ctx: Context<AddTodo>, _content: String) -> Result<()> {
+        // initialize todo
+        let todo_account = &mut ctx.accounts.todo_account;
+        let user_profile = &mut ctx.accounts.user_profile;
+
+        todo_account.authority = ctx.accounts.authority.key();
+        todo_account.idx = user_profile.last_todo;
+        todo_account.content = _content;
+        todo_account.marked = false;
+
+        user_profile.last_todo = user_profile.last_todo.checked_add(1).unwrap();
+
+        user_profile.todo_count = user_profile.todo_count.checked_add(1).unwrap();
 
         Ok(())
     }
 
+    pub fn update_todo(ctx: Context<UpdateTodo>, todo_idx: u8, content: String) -> Result<()> {
+        let todo_account = &mut ctx.accounts.todo_account;
+
+        todo_account.content = content.to_string();
+
+        Ok(())
+    }
+
+    pub fn remove_todo(ctx: Context<RemoveTodo>, idx: u8) -> Result<()> {
+        let user_profile = &mut ctx.accounts.user_profile;
+
+        user_profile.todo_count = user_profile.todo_count.checked_sub(1).unwrap();
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
-pub struct CreateUser<'info> {
-    #[account(init,seeds=[USER_SEED,authority.key().as_ref()],
-          bump,
-          payer=authority,
-          space=3065+8
-             )]
-    pub user_account: Account<'info, UserAccount>,
-
+#[instruction()]
+pub struct InitializeUser<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    #[account(
+        init,
+        seeds = [USER_TAG, authority.key().as_ref()],
+        bump,
+        payer = authority,
+        space = 8 + std::mem::size_of::<UserProfile>(),
+    )]
+    pub user_profile: Box<Account<'info, UserProfile>>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct CreatePost<'info> {
-    #[account(init,seeds=[POST_SEED,authority.key().as_ref(),&[user_account.last_post_id as u8].as_ref()],
-          bump,
-          payer=authority,
-          space=2068+8
-             )]
-    pub post: Account<'info, Post>,
-
-    #[account(mut,
-            seeds=[USER_SEED,authority.key().as_ref()],
-            bump,
-            has_one=authority
-          
-             )]
-    pub user_account: Account<'info, UserAccount>,
-
+#[instruction()]
+pub struct AddTodo<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [USER_TAG, authority.key().as_ref()],
+        bump,
+        has_one = authority,
+    )]
+    pub user_profile: Box<Account<'info, UserProfile>>,
+
+    #[account(
+        init,
+        seeds = [TODO_TAG, authority.key().as_ref(), &[(user_profile.last_todo as u8)].as_ref()],
+        bump,
+        payer = authority,
+        space = 8 + std::mem::size_of::<TodoAccount>(),
+    )]
+    pub todo_account: Box<Account<'info, TodoAccount>>,
 
     pub system_program: Program<'info, System>,
 }
 
-#[account]
-pub struct UserAccount {
-    pub name: String,      //4+25
-    pub avatar: String,    //4+3000
-    pub last_post_id: u8, //1
-    pub authority: Pubkey, //32
+#[derive(Accounts)]
+#[instruction(todo_idx: u8)]
+pub struct UpdateTodo<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [USER_TAG, authority.key().as_ref()],
+        bump,
+        has_one = authority
+    )]
+    pub user_profile: Box<Account<'info, UserProfile>>,
+
+    #[account(
+        mut,
+        seeds = [TODO_TAG, authority.key().as_ref(), &[todo_idx].as_ref()],
+        bump,
+        has_one = authority
+    )]
+    pub todo_account: Box<Account<'info, TodoAccount>>,
+
+    pub system_program: Program<'info, System>,
 }
 
-#[account]
-pub struct Post {
-    pub id: u8, //1
-    pub content: String,      //4+2000
-    pub user: Pubkey,    //32
-    pub authority: Pubkey, //32
+#[derive(Accounts)]
+#[instruction(todo_idx: u8)]
+pub struct RemoveTodo<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [USER_TAG, authority.key().as_ref()],
+        bump,
+        has_one = authority
+    )]
+    pub user_profile: Box<Account<'info, UserProfile>>,
+
+    #[account(
+        mut,
+        close = authority,
+        seeds = [TODO_TAG, authority.key().as_ref(), &[todo_idx].as_ref()],
+        bump,
+        has_one = authority
+    )]
+    pub todo_account: Box<Account<'info, TodoAccount>>,
+
+    pub system_program: Program<'info, System>,
 }
